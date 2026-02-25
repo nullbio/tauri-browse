@@ -209,7 +209,18 @@ if (strategy === 'text') {
 } else if (strategy === 'label') {
     el = document.querySelector('[aria-label="' + value.replace(/"/g, '\\\\"') + '"]');
 } else if (strategy === 'role') {
-    const candidates = document.querySelectorAll('[role="' + value + '"]');
+    const implicitRoleTags = {
+        button: 'button', link: 'a', textbox: 'input,textarea',
+        heading: 'h1,h2,h3,h4,h5,h6', img: 'img', list: 'ul,ol',
+        listitem: 'li', table: 'table', row: 'tr', cell: 'td,th',
+        navigation: 'nav', main: 'main', form: 'form',
+    };
+    const explicit = Array.from(document.querySelectorAll('[role="' + value + '"]'));
+    const implicitSel = implicitRoleTags[value] || '';
+    const implicit = implicitSel
+        ? Array.from(document.querySelectorAll(implicitSel)).filter(e => !e.getAttribute('role'))
+        : [];
+    const candidates = [...explicit, ...implicit];
     if (nameFilter) {
         for (const c of candidates) {
             const label = c.getAttribute('aria-label') || c.textContent.trim();
@@ -247,13 +258,28 @@ return generateSelector(el);
 
 # --- Configuration ---
 
+def detect_xvfb_display():
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-a", "Xvfb"], text=True, stderr=subprocess.DEVNULL)
+        for line in out.strip().splitlines():
+            for token in line.split():
+                if token.startswith(":"):
+                    return token
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return None
+
+
 class Config:
     def __init__(self, session="default", driver=None, display=None):
         self.session = session
         self.driver = driver or os.environ.get(
             "TAURI_BROWSE_DRIVER", DEFAULT_DRIVER)
-        self.display = display or os.environ.get(
-            "TAURI_BROWSE_DISPLAY") or os.environ.get("DISPLAY")
+        self.display = (display
+                        or os.environ.get("TAURI_BROWSE_DISPLAY")
+                        or detect_xvfb_display()
+                        or os.environ.get("DISPLAY"))
         if self.display:
             os.environ["DISPLAY"] = self.display
 
