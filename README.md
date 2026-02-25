@@ -8,16 +8,14 @@ Tauri on Linux uses WebKitGTK, which exposes a WebDriver interface -- not CDP (C
 
 ## Installation
 
-### From source (recommended)
+```bash
+pipx install tauri-browse
+```
+
+Or from source:
 
 ```bash
 pip install .
-```
-
-### Development mode
-
-```bash
-pip install -e .
 ```
 
 After installation, `tauri-browse` is available as a system-wide command.
@@ -32,20 +30,41 @@ sudo apt install webkit2gtk-driver xvfb imagemagick
 cargo install tauri-driver --locked
 ```
 
-## Prerequisites
+## Setting up headless testing
 
-Before using tauri-browse, you need:
-
-1. **tauri-driver** running (WebDriver server, default port 4444)
-2. **Xvfb** running for headless testing (or a real X display)
-3. Your Tauri app binary built
-
-A typical setup script runs Xvfb on display `:99`, then starts tauri-driver and a Vite dev server. Example:
+tauri-browse requires `tauri-driver` (WebDriver server) and an X display. For headless CI or development, use Xvfb. Here's a minimal dev script you can adapt for any Tauri project:
 
 ```bash
-Xvfb :99 -screen 0 1400x900x24 &
-DISPLAY=:99 tauri-driver &
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="."  # your Tauri project root
+
+# Build the Tauri app
+cargo build --manifest-path "$APP_DIR/src-tauri/Cargo.toml"
+
+# Start Xvfb (headless X server) -- match your Tauri window dimensions
+Xvfb :99 -screen 0 1400x900x24 -nolisten tcp &
+XVFB_PID=$!
+sleep 0.5
+
+export DISPLAY=:99
+unset WAYLAND_DISPLAY        # avoid Wayland conflicts (e.g. WSLg)
+export GDK_BACKEND=x11
+
+# Start tauri-driver (WebDriver server on port 4444)
+tauri-driver &
+TAURI_DRIVER_PID=$!
+
+trap "kill $TAURI_DRIVER_PID $XVFB_PID 2>/dev/null" EXIT
+
+# Start the Vite dev server (frontend hot reload)
+pnpm --dir "$APP_DIR" dev
 ```
+
+Save this as e.g. `dev-headless.sh`, then in a separate terminal use tauri-browse to interact with the app. tauri-browse auto-detects the Xvfb display, so no `DISPLAY` setup is needed on the client side.
+
+If your Tauri app uses `beforeDevCommand` in `tauri.conf.json` (the default), `pnpm tauri dev` handles both the frontend dev server and the Rust build together. Replace the last two commands with `pnpm tauri dev` in that case.
 
 ## Quick start
 
@@ -84,14 +103,25 @@ tauri-browse [options] <command> [args]
 |---|---|---|
 | `--session <name>` | Session name for parallel sessions | `default` |
 | `--driver <url>` | WebDriver URL | `http://localhost:4444` |
-| `--display <display>` | X display for screenshots | `$DISPLAY` |
+| `--display <display>` | X display for screenshots | auto-detected from Xvfb |
 
 ### Environment variables
 
 | Variable | Description |
 |---|---|
 | `TAURI_BROWSE_DRIVER` | WebDriver URL (same as `--driver`) |
-| `TAURI_BROWSE_DISPLAY` | X display for screenshots (same as `--display`) |
+| `TAURI_BROWSE_DISPLAY` | X display override (same as `--display`) |
+
+### Display auto-detection
+
+tauri-browse automatically detects a running Xvfb process and uses its display for screenshots. The priority order is:
+
+1. `--display` flag
+2. `TAURI_BROWSE_DISPLAY` env var
+3. Running Xvfb process (auto-detected via `pgrep`)
+4. `DISPLAY` env var
+
+This means you typically don't need to set `DISPLAY` at all -- just start Xvfb and tauri-browse finds it.
 
 ## Commands
 
@@ -143,12 +173,13 @@ tauri-browse highlight @e1          # Highlight element visually
 
 ### Semantic find
 
-Find elements by semantic properties and perform an action.
+Find elements by semantic properties and perform an action. For `role`, both explicit `role="..."` attributes and implicit roles (e.g. `<button>` for `role=button`) are matched.
 
 ```bash
 tauri-browse find text "Sign In" click
 tauri-browse find label "Email" fill "user@test.com"
 tauri-browse find role button click
+tauri-browse find role button click --name "Submit"
 tauri-browse find testid "submit-btn" click
 tauri-browse find placeholder "Search" type "query"
 ```
@@ -197,10 +228,10 @@ tauri-browse diff snapshot --baseline before.txt
 tauri-browse diff screenshot --baseline before.png
 
 # Diff two URLs (text comparison)
-tauri-browse diff url https://staging.example.com https://prod.example.com
+tauri-browse diff url http://localhost:1420 http://localhost:1421
 
 # Diff two URLs (screenshot comparison)
-tauri-browse diff url https://staging.example.com https://prod.example.com --screenshot
+tauri-browse diff url http://localhost:1420 http://localhost:1421 --screenshot
 
 # Scope diff to a specific element
 tauri-browse diff url <url1> <url2> --selector "#main"
@@ -256,7 +287,7 @@ tauri-browse communicates with `tauri-driver` over the WebDriver HTTP protocol. 
 tauri-browse  --(HTTP/JSON)-->  tauri-driver  --(WebDriver)-->  WebKitWebDriver  -->  Tauri Webview
 ```
 
-Since this drives the actual Tauri webview (not a regular browser), all Tauri IPC commands work -- you can spawn agents, access the database, invoke Rust commands, etc.
+Since this drives the actual Tauri webview (not a regular browser), all Tauri IPC commands work -- you can invoke Rust commands, access sidecars, use the full Tauri API from JavaScript, etc.
 
 ## License
 
