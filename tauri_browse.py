@@ -24,6 +24,9 @@ Commands:
     launch <binary>             Launch Tauri app via WebDriver
     open <url>                  Navigate to URL (aliases: goto, navigate)
     close                       Close session
+    back                        Navigate back
+    forward                     Navigate forward
+    reload                      Reload page
 
     snapshot -i                 Interactive elements with @refs
     snapshot -i -C              Include cursor-interactive elements
@@ -35,30 +38,54 @@ Commands:
     screenshot --full           Full page screenshot (scroll + stitch)
 
     click <@ref|sel>            Click element
+    dblclick <@ref|sel>         Double-click element
+    hover <@ref|sel>            Hover over element
+    focus <@ref|sel>            Focus element
+    drag <src> <dst>            Drag from source to destination
     fill <@ref|sel> <text>      Clear and type into element
     type <@ref|sel> <text>      Type without clearing
     select <@ref|sel> <val>     Select dropdown option
-    check <@ref|sel>            Toggle checkbox
+    check <@ref|sel>            Toggle checkbox on
+    uncheck <@ref|sel>          Uncheck checkbox (only if checked)
     press <key>                 Press keyboard key
     scroll <dir> <amount>       Scroll (up/down/left/right)
+    scrollintoview <@ref|sel>   Scroll element into view
     highlight <@ref|sel>        Highlight element visually
+    upload <@ref|sel> <file>    Upload file to input
+    download <@ref|sel>         Click and wait for download
 
     find text <text> <action>   Find by text content, then act
     find label <text> <action>  Find by aria-label, then act
     find role <role> <action>   Find by role attribute, then act
     find testid <id> <action>   Find by data-testid, then act
     find placeholder <t> <act>  Find by placeholder, then act
+    find alt <text> <action>    Find by alt attribute, then act
+    find title <text> <action>  Find by title attribute, then act
+    find first <sel> <action>   Find first matching element
+    find last <sel> <action>    Find last matching element
+    find nth <n> <sel> <action> Find nth matching element
 
     eval <js>                   Execute JS in webview
     eval --stdin                Read JS from stdin
 
     get text <@ref|sel>         Get element text
+    get html <@ref|sel>         Get element innerHTML (--outer for outer)
+    get value <@ref|sel>        Get input value
+    get attr <@ref|sel> <name>  Get element attribute
+    get count <selector>        Count matching elements
+    get box <@ref|sel>          Get bounding rectangle as JSON
+    get styles <@ref|sel> [p]   Get computed styles (specific or common)
     get url                     Get current URL
     get title                   Get page title
+
+    is visible <@ref|sel>       Check if element is visible
+    is enabled <@ref|sel>       Check if element is enabled
+    is checked <@ref|sel>       Check if element is checked
 
     wait <@ref|sel>             Wait for element
     wait <ms>                   Wait milliseconds
     wait --url <pattern>        Wait for URL to contain pattern
+    wait --text <text>          Wait for text to appear on page
     wait --load networkidle     Wait for network idle
     wait --fn <js>              Wait for JS condition to be truthy
 
@@ -67,10 +94,24 @@ Commands:
     diff screenshot --baseline  Visual pixel diff against baseline image
     diff url <u1> <u2>          Diff two URLs (text or --screenshot)
 
+    frame <@ref|sel>            Switch to iframe
+    frame main                  Switch back to main frame
+
+    dialog accept [text]        Accept alert/prompt dialog
+    dialog dismiss              Dismiss dialog
+    dialog text                 Get dialog text
+
+    console [--clear]           Show console output
+    console --level <level>     Filter by level (log/warn/error/info/debug)
+    errors [--clear]            Show JS errors
+
     session list                List active sessions
     state save <file>           Save cookies + localStorage
     state load <file>           Restore cookies + localStorage
     state list                  List saved state files
+    state show <name>           Show state file contents
+    state rename <old> <new>    Rename state file
+    state clean                 Remove empty/corrupt state files
     state clear [name]          Clear saved state
 
 Configuration:
@@ -257,6 +298,19 @@ if (strategy === 'text') {
     el = document.querySelector('[data-testid="' + value + '"]');
 } else if (strategy === 'placeholder') {
     el = document.querySelector('[placeholder="' + value.replace(/"/g, '\\\\"') + '"]');
+} else if (strategy === 'alt') {
+    el = document.querySelector('[alt="' + value.replace(/"/g, '\\\\"') + '"]');
+} else if (strategy === 'title') {
+    el = document.querySelector('[title="' + value.replace(/"/g, '\\\\"') + '"]');
+} else if (strategy === 'first') {
+    el = document.querySelector(value);
+} else if (strategy === 'last') {
+    const all = document.querySelectorAll(value);
+    el = all.length ? all[all.length - 1] : null;
+} else if (strategy === 'nth') {
+    const n = parseInt(nameFilter, 10);
+    const all = document.querySelectorAll(value);
+    el = (n >= 1 && n <= all.length) ? all[n - 1] : null;
 }
 
 if (!el) return null;
@@ -277,6 +331,48 @@ function generateSelector(el) {
 }
 
 return generateSelector(el);
+"""
+
+W3C_ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf"
+
+
+def element_origin(element_id):
+    return {W3C_ELEMENT_KEY: element_id}
+
+
+CONSOLE_INJECT_JS = """
+if (!window.__TAURI_BROWSE_CONSOLE__) {
+    window.__TAURI_BROWSE_CONSOLE__ = [];
+    const levels = ['log', 'warn', 'error', 'info', 'debug'];
+    levels.forEach(level => {
+        const orig = console[level];
+        console[level] = function() {
+            window.__TAURI_BROWSE_CONSOLE__.push({
+                level: level,
+                args: Array.from(arguments).map(a => {
+                    try { return typeof a === 'object' ? JSON.stringify(a) : String(a); }
+                    catch(e) { return String(a); }
+                }),
+                timestamp: Date.now()
+            });
+            orig.apply(console, arguments);
+        };
+    });
+    window.onerror = function(msg, source, line, col, err) {
+        window.__TAURI_BROWSE_CONSOLE__.push({
+            level: 'error',
+            args: [msg + ' at ' + source + ':' + line + ':' + col],
+            timestamp: Date.now()
+        });
+    };
+    window.addEventListener('unhandledrejection', function(e) {
+        window.__TAURI_BROWSE_CONSOLE__.push({
+            level: 'error',
+            args: ['Unhandled rejection: ' + (e.reason && e.reason.message || e.reason || 'unknown')],
+            timestamp: Date.now()
+        });
+    });
+}
 """
 
 
@@ -757,6 +853,7 @@ def cmd_launch(config, args):
     print(f"Session started: {sid}")
 
     time.sleep(2)
+    _inject_console(config, sid)
     url = request(config.driver, "GET", f"{surl(config.driver, sid)}/url")
     print(f"URL: {url['value']}")
 
@@ -770,6 +867,18 @@ def cmd_open(config, args):
     sid = state["session_id"]
     request(config.driver, "POST", f"{surl(config.driver, sid)}/url",
             {"url": args[0]})
+    # Wait for DOM to be ready before injecting console capture
+    deadline = time.time() + config.timeout
+    while time.time() < deadline:
+        resp = request_quiet("POST",
+                             f"{surl(config.driver, sid)}/execute/sync", {
+                                 "script": "return document.readyState",
+                                 "args": [],
+                             })
+        if resp and resp.get("value") in ("interactive", "complete"):
+            break
+        time.sleep(0.1)
+    _inject_console(config, sid)
     print(f"Navigated to {args[0]}")
 
 
@@ -1025,8 +1134,9 @@ def cmd_highlight(config, args):
 
 def cmd_find(config, args):
     if len(args) < 3:
-        print("Usage: tauri-browse find <text|label|role|testid|placeholder>"
-              " <value> <action> [action-args]", file=sys.stderr)
+        print("Usage: tauri-browse find <text|label|role|testid|placeholder|"
+              "alt|title|first|last|nth> <value> <action> [action-args]",
+              file=sys.stderr)
         sys.exit(1)
 
     state = load_session(config.session)
@@ -1043,6 +1153,20 @@ def cmd_find(config, args):
         if idx + 1 < len(action_args):
             name_filter = action_args[idx + 1]
             action_args = action_args[:idx] + action_args[idx + 2:]
+
+    # For 'nth' strategy, the name_filter carries the 1-based index
+    if strategy == "nth":
+        if not name_filter:
+            # Reparse: find nth <n> <selector> <action>
+            # args = [nth, n, selector, action, ...]
+            if len(args) < 4:
+                print("Usage: tauri-browse find nth <n> <selector> <action>",
+                      file=sys.stderr)
+                sys.exit(1)
+            name_filter = value  # the N
+            value = action       # the selector
+            action = args[3]
+            action_args = args[4:]
 
     selector = find_by_strategy(config, sid, strategy, value, name_filter)
     element_id = find_element(config, sid, selector)
@@ -1073,8 +1197,30 @@ def cmd_find(config, args):
         request(config.driver, "POST",
                 f"{surl(config.driver, sid)}/element/{element_id}/click", {})
         print("Toggled.")
+    elif action == "select":
+        if not action_args:
+            print("Usage: find ... select <option>", file=sys.stderr)
+            sys.exit(1)
+        cmd_select(config, [selector, action_args[0]])
     elif action == "highlight":
         cmd_highlight(config, [selector])
+    elif action == "dblclick":
+        cmd_dblclick(config, [selector])
+    elif action == "hover":
+        cmd_hover(config, [selector])
+    elif action == "focus":
+        cmd_focus(config, [selector])
+    elif action == "uncheck":
+        cmd_uncheck(config, [selector])
+    elif action == "scrollintoview":
+        cmd_scrollintoview(config, [selector])
+    elif action == "upload":
+        if not action_args:
+            print("Usage: find ... upload <file>", file=sys.stderr)
+            sys.exit(1)
+        cmd_upload(config, [selector, action_args[0]])
+    elif action == "download":
+        cmd_download(config, [selector] + action_args)
     else:
         print(f"Unknown action: {action}", file=sys.stderr)
         sys.exit(1)
@@ -1133,6 +1279,102 @@ def cmd_get(config, args):
         resp = request(config.driver, "GET",
                        f"{surl(config.driver, sid)}/element/{element_id}/text")
         print(resp["value"])
+    elif subcmd == "html":
+        if len(args) < 2:
+            print("Usage: tauri-browse get html <@ref|selector> [--outer]",
+                  file=sys.stderr)
+            sys.exit(1)
+        selector = resolve_target(state, args[1])
+        prop = "outerHTML" if "--outer" in args else "innerHTML"
+        resp = request(config.driver, "POST",
+                       f"{surl(config.driver, sid)}/execute/sync", {
+                           "script": f"return document.querySelector(arguments[0]).{prop}",
+                           "args": [selector],
+                       })
+        print(resp["value"])
+    elif subcmd == "value":
+        if len(args) < 2:
+            print("Usage: tauri-browse get value <@ref|selector>",
+                  file=sys.stderr)
+            sys.exit(1)
+        selector = resolve_target(state, args[1])
+        resp = request(config.driver, "POST",
+                       f"{surl(config.driver, sid)}/execute/sync", {
+                           "script": "return document.querySelector(arguments[0]).value",
+                           "args": [selector],
+                       })
+        print(resp["value"] if resp["value"] is not None else "")
+    elif subcmd == "attr":
+        if len(args) < 3:
+            print("Usage: tauri-browse get attr <@ref|selector> <name>",
+                  file=sys.stderr)
+            sys.exit(1)
+        selector = resolve_target(state, args[1])
+        resp = request(config.driver, "POST",
+                       f"{surl(config.driver, sid)}/execute/sync", {
+                           "script": "return document.querySelector(arguments[0]).getAttribute(arguments[1])",
+                           "args": [selector, args[2]],
+                       })
+        print(resp["value"] if resp["value"] is not None else "")
+    elif subcmd == "count":
+        if len(args) < 2:
+            print("Usage: tauri-browse get count <selector>",
+                  file=sys.stderr)
+            sys.exit(1)
+        resp = request(config.driver, "POST",
+                       f"{surl(config.driver, sid)}/execute/sync", {
+                           "script": "return document.querySelectorAll(arguments[0]).length",
+                           "args": [args[1]],
+                       })
+        print(resp["value"])
+    elif subcmd == "box":
+        if len(args) < 2:
+            print("Usage: tauri-browse get box <@ref|selector>",
+                  file=sys.stderr)
+            sys.exit(1)
+        selector = resolve_target(state, args[1])
+        resp = request(config.driver, "POST",
+                       f"{surl(config.driver, sid)}/execute/sync", {
+                           "script": """
+                           const r = document.querySelector(arguments[0]).getBoundingClientRect();
+                           return {x: r.x, y: r.y, width: r.width, height: r.height, top: r.top, right: r.right, bottom: r.bottom, left: r.left};
+                           """,
+                           "args": [selector],
+                       })
+        print(json.dumps(resp["value"], indent=2))
+    elif subcmd == "styles":
+        if len(args) < 2:
+            print("Usage: tauri-browse get styles <@ref|selector> [prop1 prop2 ...]",
+                  file=sys.stderr)
+            sys.exit(1)
+        selector = resolve_target(state, args[1])
+        props = args[2:]
+        if props:
+            resp = request(config.driver, "POST",
+                           f"{surl(config.driver, sid)}/execute/sync", {
+                               "script": """
+                               const cs = window.getComputedStyle(document.querySelector(arguments[0]));
+                               const result = {};
+                               for (const p of arguments[1]) result[p] = cs.getPropertyValue(p);
+                               return result;
+                               """,
+                               "args": [selector, props],
+                           })
+        else:
+            resp = request(config.driver, "POST",
+                           f"{surl(config.driver, sid)}/execute/sync", {
+                               "script": """
+                               const cs = window.getComputedStyle(document.querySelector(arguments[0]));
+                               const props = ['display', 'visibility', 'opacity', 'color', 'background-color',
+                                   'font-size', 'font-weight', 'width', 'height', 'margin', 'padding',
+                                   'position', 'z-index', 'overflow'];
+                               const result = {};
+                               for (const p of props) result[p] = cs.getPropertyValue(p);
+                               return result;
+                               """,
+                               "args": [selector],
+                           })
+        print(json.dumps(resp["value"], indent=2))
     else:
         print(f"Unknown get subcommand: {subcmd}", file=sys.stderr)
         sys.exit(1)
@@ -1193,6 +1435,27 @@ def cmd_wait(config, args):
         else:
             print(f"Unknown load strategy: {strategy}", file=sys.stderr)
             sys.exit(1)
+
+    if args[0] == "--text":
+        if len(args) < 2:
+            print("Usage: tauri-browse wait --text <text>",
+                  file=sys.stderr)
+            sys.exit(1)
+        text = args[1]
+        timeout_ms = int(args[2]) if len(args) > 2 else 10000
+        deadline = time.time() + timeout_ms / 1000
+        while time.time() < deadline:
+            resp = request(config.driver, "POST",
+                           f"{surl(config.driver, sid)}/execute/sync", {
+                               "script": "return document.body.innerText.includes(arguments[0])",
+                               "args": [text],
+                           })
+            if resp["value"]:
+                print(f"Text found: {text}")
+                return
+            time.sleep(0.25)
+        print(f"Timeout waiting for text: {text}", file=sys.stderr)
+        sys.exit(1)
 
     if args[0] == "--fn":
         if len(args) < 2:
@@ -1480,9 +1743,466 @@ def cmd_state(config, args):
                 f.unlink()
                 count += 1
             print(f"Cleared {count} state files.")
+
+    elif subcmd == "show":
+        if len(args) < 2:
+            print("Usage: tauri-browse state show <name>", file=sys.stderr)
+            sys.exit(1)
+        ensure_dirs()
+        target = STATES_DIR / args[1]
+        if not target.suffix:
+            target = target.with_suffix(".json")
+        try:
+            with open(target) as f:
+                data = json.load(f)
+            print(json.dumps(data, indent=2))
+        except FileNotFoundError:
+            print(f"Not found: {target.name}", file=sys.stderr)
+            sys.exit(1)
+        except json.JSONDecodeError:
+            print(f"Corrupt state file: {target.name}", file=sys.stderr)
+            sys.exit(1)
+
+    elif subcmd == "rename":
+        if len(args) < 3:
+            print("Usage: tauri-browse state rename <old> <new>",
+                  file=sys.stderr)
+            sys.exit(1)
+        ensure_dirs()
+        old = STATES_DIR / args[1]
+        new = STATES_DIR / args[2]
+        if not old.suffix:
+            old = old.with_suffix(".json")
+        if not new.suffix:
+            new = new.with_suffix(".json")
+        if not old.exists():
+            print(f"Not found: {old.name}", file=sys.stderr)
+            sys.exit(1)
+        if new.exists():
+            print(f"Already exists: {new.name}", file=sys.stderr)
+            sys.exit(1)
+        old.rename(new)
+        print(f"Renamed {old.name} -> {new.name}")
+
+    elif subcmd == "clean":
+        ensure_dirs()
+        removed = 0
+        for f in STATES_DIR.glob("*.json"):
+            try:
+                with open(f) as fh:
+                    data = json.load(fh)
+                if not data:
+                    f.unlink()
+                    removed += 1
+            except (json.JSONDecodeError, OSError):
+                f.unlink()
+                removed += 1
+        print(f"Cleaned {removed} state files.")
+
     else:
         print(f"Unknown state subcommand: {subcmd}", file=sys.stderr)
         sys.exit(1)
+
+
+def cmd_back(config, _args):
+    state = load_session(config.session)
+    sid = state["session_id"]
+    request(config.driver, "POST", f"{surl(config.driver, sid)}/back", {})
+    print("Navigated back.")
+
+
+def cmd_forward(config, _args):
+    state = load_session(config.session)
+    sid = state["session_id"]
+    request(config.driver, "POST", f"{surl(config.driver, sid)}/forward", {})
+    print("Navigated forward.")
+
+
+def cmd_reload(config, _args):
+    state = load_session(config.session)
+    sid = state["session_id"]
+    request(config.driver, "POST", f"{surl(config.driver, sid)}/refresh", {})
+    print("Reloaded.")
+
+
+def cmd_dblclick(config, args):
+    if not args:
+        print("Usage: tauri-browse dblclick <@ref|selector>", file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    selector = resolve_target(state, args[0])
+    element_id = find_element(config, sid, selector)
+    request(config.driver, "POST", f"{surl(config.driver, sid)}/actions", {
+        "actions": [{
+            "type": "pointer",
+            "id": "mouse",
+            "parameters": {"pointerType": "mouse"},
+            "actions": [
+                {"type": "pointerMove", "duration": 0, "origin": element_origin(element_id), "x": 0, "y": 0},
+                {"type": "pointerDown", "button": 0},
+                {"type": "pointerUp", "button": 0},
+                {"type": "pointerDown", "button": 0},
+                {"type": "pointerUp", "button": 0},
+            ]
+        }]
+    })
+    print("Double-clicked.")
+
+
+def cmd_hover(config, args):
+    if not args:
+        print("Usage: tauri-browse hover <@ref|selector>", file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    selector = resolve_target(state, args[0])
+    element_id = find_element(config, sid, selector)
+    request(config.driver, "POST", f"{surl(config.driver, sid)}/actions", {
+        "actions": [{
+            "type": "pointer",
+            "id": "mouse",
+            "parameters": {"pointerType": "mouse"},
+            "actions": [
+                {"type": "pointerMove", "duration": 100, "origin": element_origin(element_id), "x": 0, "y": 0},
+            ]
+        }]
+    })
+    print("Hovered.")
+
+
+def cmd_focus(config, args):
+    if not args:
+        print("Usage: tauri-browse focus <@ref|selector>", file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    selector = resolve_target(state, args[0])
+    request(config.driver, "POST",
+            f"{surl(config.driver, sid)}/execute/sync", {
+                "script": "document.querySelector(arguments[0]).focus()",
+                "args": [selector],
+            })
+    print("Focused.")
+
+
+def cmd_drag(config, args):
+    if len(args) < 2:
+        print("Usage: tauri-browse drag <src @ref|selector> <dst @ref|selector>",
+              file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    src_selector = resolve_target(state, args[0])
+    dst_selector = resolve_target(state, args[1])
+    src_id = find_element(config, sid, src_selector)
+    dst_id = find_element(config, sid, dst_selector)
+    request(config.driver, "POST", f"{surl(config.driver, sid)}/actions", {
+        "actions": [{
+            "type": "pointer",
+            "id": "mouse",
+            "parameters": {"pointerType": "mouse"},
+            "actions": [
+                {"type": "pointerMove", "duration": 0, "origin": element_origin(src_id), "x": 0, "y": 0},
+                {"type": "pointerDown", "button": 0},
+                {"type": "pause", "duration": 100},
+                {"type": "pointerMove", "duration": 250, "origin": element_origin(dst_id), "x": 0, "y": 0},
+                {"type": "pointerUp", "button": 0},
+            ]
+        }]
+    })
+    print("Dragged.")
+
+
+def cmd_scrollintoview(config, args):
+    if not args:
+        print("Usage: tauri-browse scrollintoview <@ref|selector>",
+              file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    selector = resolve_target(state, args[0])
+    request(config.driver, "POST",
+            f"{surl(config.driver, sid)}/execute/sync", {
+                "script": "document.querySelector(arguments[0]).scrollIntoView({block: 'center', behavior: 'instant'})",
+                "args": [selector],
+            })
+    print("Scrolled into view.")
+
+
+def cmd_uncheck(config, args):
+    if not args:
+        print("Usage: tauri-browse uncheck <@ref|selector>", file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    selector = resolve_target(state, args[0])
+    resp = request(config.driver, "POST",
+                   f"{surl(config.driver, sid)}/execute/sync", {
+                       "script": "return !!document.querySelector(arguments[0]).checked",
+                       "args": [selector],
+                   })
+    if resp["value"]:
+        element_id = find_element(config, sid, selector)
+        request(config.driver, "POST",
+                f"{surl(config.driver, sid)}/element/{element_id}/click", {})
+        print("Unchecked.")
+    else:
+        print("Already unchecked.")
+
+
+def cmd_upload(config, args):
+    if len(args) < 2:
+        print("Usage: tauri-browse upload <@ref|selector> <file>",
+              file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    selector = resolve_target(state, args[0])
+    file_path = os.path.abspath(args[1])
+    if not os.path.isfile(file_path):
+        print(f"File not found: {file_path}", file=sys.stderr)
+        sys.exit(1)
+    element_id = find_element(config, sid, selector)
+    request(config.driver, "POST",
+            f"{surl(config.driver, sid)}/element/{element_id}/value",
+            {"text": file_path})
+    print(f"Uploaded: {file_path}")
+
+
+def cmd_download(config, args):
+    if not args:
+        print("Usage: tauri-browse download <@ref|selector> [--path <dir>] [--timeout <ms>]",
+              file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    selector = resolve_target(state, args[0])
+
+    download_dir = config.download_path
+    timeout_ms = 30000
+    rest = args[1:]
+    if "--path" in rest:
+        idx = rest.index("--path")
+        if idx + 1 < len(rest):
+            download_dir = rest[idx + 1]
+    if "--timeout" in rest:
+        idx = rest.index("--timeout")
+        if idx + 1 < len(rest):
+            timeout_ms = int(rest[idx + 1])
+
+    if not download_dir:
+        print("No download directory. Use --path or --download-path.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    download_dir = os.path.abspath(download_dir)
+    if not os.path.isdir(download_dir):
+        print(f"Download directory not found: {download_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    partial_exts = {".crdownload", ".part", ".tmp", ".download"}
+    before = set(os.listdir(download_dir))
+
+    element_id = find_element(config, sid, selector)
+    request(config.driver, "POST",
+            f"{surl(config.driver, sid)}/element/{element_id}/click", {})
+
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        time.sleep(0.5)
+        current = set(os.listdir(download_dir))
+        new_files = current - before
+        completed = [
+            f for f in new_files
+            if not any(f.endswith(ext) for ext in partial_exts)
+        ]
+        if completed:
+            for f in sorted(completed):
+                print(os.path.join(download_dir, f))
+            return
+
+    print("Timeout waiting for download.", file=sys.stderr)
+    sys.exit(1)
+
+
+def cmd_frame(config, args):
+    if not args:
+        print("Usage: tauri-browse frame <@ref|selector|main>",
+              file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+
+    if args[0] == "main":
+        request(config.driver, "POST",
+                f"{surl(config.driver, sid)}/frame", {"id": None})
+        print("Switched to main frame.")
+    else:
+        selector = resolve_target(state, args[0])
+        element_id = find_element(config, sid, selector)
+        request(config.driver, "POST",
+                f"{surl(config.driver, sid)}/frame",
+                {"id": element_origin(element_id)})
+        print("Switched to frame.")
+
+
+def cmd_dialog(config, args):
+    if not args:
+        print("Usage: tauri-browse dialog <accept|dismiss|text> [text]",
+              file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    subcmd = args[0]
+    base = surl(config.driver, sid)
+
+    if subcmd == "accept":
+        if len(args) > 1:
+            request(config.driver, "POST", f"{base}/alert/text",
+                    {"text": args[1]})
+        request(config.driver, "POST", f"{base}/alert/accept", {})
+        print("Dialog accepted.")
+    elif subcmd == "dismiss":
+        request(config.driver, "POST", f"{base}/alert/dismiss", {})
+        print("Dialog dismissed.")
+    elif subcmd == "text":
+        resp = request(config.driver, "GET", f"{base}/alert/text")
+        print(resp["value"])
+    else:
+        print(f"Unknown dialog subcommand: {subcmd}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_is(config, args):
+    if len(args) < 2:
+        print("Usage: tauri-browse is <visible|enabled|checked> <@ref|selector>",
+              file=sys.stderr)
+        sys.exit(1)
+
+    state = load_session(config.session)
+    sid = state["session_id"]
+    check = args[0]
+    selector = resolve_target(state, args[1])
+
+    if check == "visible":
+        script = """
+        const el = document.querySelector(arguments[0]);
+        if (!el) return false;
+        const cs = window.getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+        """
+    elif check == "enabled":
+        script = """
+        const el = document.querySelector(arguments[0]);
+        if (!el) return false;
+        return !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+        """
+    elif check == "checked":
+        script = """
+        const el = document.querySelector(arguments[0]);
+        if (!el) return false;
+        if ('checked' in el) return !!el.checked;
+        return el.getAttribute('aria-checked') === 'true';
+        """
+    else:
+        print(f"Unknown check: {check}. Use visible/enabled/checked.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    resp = request(config.driver, "POST",
+                   f"{surl(config.driver, sid)}/execute/sync",
+                   {"script": script, "args": [selector]})
+    result = resp["value"]
+    print("true" if result else "false")
+    if not result:
+        sys.exit(1)
+
+
+def _inject_console(config, sid):
+    request_quiet("POST", f"{surl(config.driver, sid)}/execute/sync",
+                  {"script": CONSOLE_INJECT_JS, "args": []})
+
+
+def cmd_console(config, args):
+    state = load_session(config.session)
+    sid = state["session_id"]
+    do_clear = "--clear" in args
+    level_filter = None
+    if "--level" in args:
+        idx = args.index("--level")
+        if idx + 1 < len(args):
+            level_filter = args[idx + 1]
+
+    resp = request(config.driver, "POST",
+                   f"{surl(config.driver, sid)}/execute/sync", {
+                       "script": "return window.__TAURI_BROWSE_CONSOLE__ || []",
+                       "args": [],
+                   })
+    entries = resp["value"]
+    if level_filter:
+        entries = [e for e in entries if e.get("level") == level_filter]
+
+    for entry in entries:
+        level = entry.get("level", "log")
+        msg = " ".join(entry.get("args", []))
+        print(f"[{level}] {msg}")
+
+    if do_clear:
+        if level_filter:
+            request(config.driver, "POST",
+                    f"{surl(config.driver, sid)}/execute/sync", {
+                        "script": "window.__TAURI_BROWSE_CONSOLE__ = (window.__TAURI_BROWSE_CONSOLE__ || []).filter(e => e.level !== arguments[0])",
+                        "args": [level_filter],
+                    })
+        else:
+            request(config.driver, "POST",
+                    f"{surl(config.driver, sid)}/execute/sync", {
+                        "script": "window.__TAURI_BROWSE_CONSOLE__ = []",
+                        "args": [],
+                    })
+
+    if not entries:
+        print("No console entries.")
+
+
+def cmd_errors(config, args):
+    state = load_session(config.session)
+    sid = state["session_id"]
+    do_clear = "--clear" in args
+
+    resp = request(config.driver, "POST",
+                   f"{surl(config.driver, sid)}/execute/sync", {
+                       "script": "return (window.__TAURI_BROWSE_CONSOLE__ || []).filter(e => e.level === 'error')",
+                       "args": [],
+                   })
+    entries = resp["value"]
+
+    for entry in entries:
+        msg = " ".join(entry.get("args", []))
+        print(f"[error] {msg}")
+
+    if do_clear:
+        request(config.driver, "POST",
+                f"{surl(config.driver, sid)}/execute/sync", {
+                    "script": "window.__TAURI_BROWSE_CONSOLE__ = (window.__TAURI_BROWSE_CONSOLE__ || []).filter(e => e.level !== 'error')",
+                    "args": [],
+                })
+
+    if not entries:
+        print("No errors.")
 
 
 # --- Dispatch ---
@@ -1493,21 +2213,37 @@ COMMANDS = {
     "goto": cmd_open,
     "navigate": cmd_open,
     "close": cmd_close,
+    "back": cmd_back,
+    "forward": cmd_forward,
+    "reload": cmd_reload,
     "snapshot": cmd_snapshot,
     "screenshot": cmd_screenshot,
     "click": cmd_click,
+    "dblclick": cmd_dblclick,
+    "hover": cmd_hover,
+    "focus": cmd_focus,
+    "drag": cmd_drag,
     "fill": cmd_fill,
     "type": cmd_type,
     "select": cmd_select,
     "check": cmd_check,
+    "uncheck": cmd_uncheck,
     "press": cmd_press,
     "scroll": cmd_scroll,
+    "scrollintoview": cmd_scrollintoview,
     "highlight": cmd_highlight,
+    "upload": cmd_upload,
+    "download": cmd_download,
     "find": cmd_find,
     "eval": cmd_eval,
     "get": cmd_get,
+    "is": cmd_is,
     "wait": cmd_wait,
     "diff": cmd_diff,
+    "frame": cmd_frame,
+    "dialog": cmd_dialog,
+    "console": cmd_console,
+    "errors": cmd_errors,
     "session": cmd_session,
     "state": cmd_state,
 }

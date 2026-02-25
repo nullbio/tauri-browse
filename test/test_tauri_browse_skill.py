@@ -120,6 +120,21 @@ class TestCommandsReference:
     def test_has_wait_section(self):
         assert "## Wait" in self.content
 
+    def test_has_frames_section(self):
+        assert "## Frames" in self.content
+
+    def test_has_dialogs_section(self):
+        assert "## Dialogs" in self.content
+
+    def test_has_console_section(self):
+        assert "## Console" in self.content
+
+    def test_has_state_checks_section(self):
+        assert "## State Checks" in self.content
+
+    def test_has_file_handling_section(self):
+        assert "## File Handling" in self.content
+
     def test_uses_tauri_browse_command(self):
         assert "tauri-browse" in self.content
 
@@ -131,6 +146,39 @@ class TestCommandsReference:
 
     def test_documents_environment_variables(self):
         assert "TAURI_BROWSE_" in self.content
+
+    def test_documents_new_navigation_commands(self):
+        assert "tauri-browse back" in self.content
+        assert "tauri-browse forward" in self.content
+        assert "tauri-browse reload" in self.content
+
+    def test_documents_new_interaction_commands(self):
+        assert "tauri-browse dblclick" in self.content
+        assert "tauri-browse hover" in self.content
+        assert "tauri-browse focus" in self.content
+        assert "tauri-browse drag" in self.content
+        assert "tauri-browse uncheck" in self.content
+        assert "tauri-browse scrollintoview" in self.content
+
+    def test_documents_new_get_subcommands(self):
+        assert "get html" in self.content
+        assert "get value" in self.content
+        assert "get attr" in self.content
+        assert "get count" in self.content
+        assert "get box" in self.content
+        assert "get styles" in self.content
+
+    def test_documents_new_find_strategies(self):
+        assert "find alt" in self.content
+        assert "find title" in self.content
+        assert "find first" in self.content
+        assert "find last" in self.content
+        assert "find nth" in self.content
+
+    def test_documents_state_management_commands(self):
+        assert "state show" in self.content
+        assert "state rename" in self.content
+        assert "state clean" in self.content
 
 
 class TestSnapshotRefsReference:

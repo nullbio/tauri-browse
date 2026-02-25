@@ -1,6 +1,6 @@
 # tauri-browse
 
-WebDriver CLI for Tauri apps via tauri-driver. Mirrors the [agent-browser](https://github.com/anthropics/agent-browser) API using WebDriver protocol (required for Tauri's WebKitGTK webview on Linux).
+WebDriver CLI for Tauri apps via tauri-driver. Mirrors the [agent-browser](https://github.com/vercel-labs/agent-browser) API using WebDriver protocol (required for Tauri's WebKitGTK webview on Linux).
 
 ## Why not agent-browser?
 
@@ -180,11 +180,14 @@ This means you typically don't need to set `DISPLAY` at all -- just start Xvfb a
 tauri-browse launch <binary>        # Launch Tauri app via WebDriver
 tauri-browse open <url>             # Navigate to URL (aliases: goto, navigate)
 tauri-browse close                  # Close session
+tauri-browse back                   # Navigate back in history
+tauri-browse forward                # Navigate forward in history
+tauri-browse reload                 # Reload current page
 ```
 
 ### Snapshots
 
-Get a text representation of interactive elements on the page, each assigned a ref (`@e1`, `@e2`, ...) for interaction.
+Get a text representation of interactive elements on the page, each assigned a ref (`@e1`, `@e2`, ...) for interaction. Optimized for LLM-based automation.
 
 ```bash
 tauri-browse snapshot -i            # Interactive elements with refs
@@ -201,7 +204,7 @@ tauri-browse screenshot --annotate      # Numbered badges on interactive element
 tauri-browse screenshot --full          # Full page (scroll + stitch)
 ```
 
-The `--annotate` flag overlays numbered badges on interactive elements and prints a legend mapping `[N]` to `@eN`. Refs are cached, so you can interact with elements immediately after.
+The `--annotate` flag overlays numbered badges on interactive elements and prints a legend mapping `[N]` to `@eN`. Refs are cached, so you can interact with elements immediately after. Useful for multimodal AI models that need to reason about visual layout, unlabeled icon buttons, canvas elements, or visual state the text snapshot cannot capture.
 
 Screenshots use ImageMagick's `import` command to capture the X display, because WebKitWebDriver's screenshot endpoint does not work reliably under Xvfb.
 
@@ -211,13 +214,28 @@ All interaction commands accept either a ref (`@e1`) or a CSS selector.
 
 ```bash
 tauri-browse click @e1              # Click element
+tauri-browse dblclick @e1           # Double-click element
+tauri-browse hover @e1              # Hover over element (triggers CSS :hover)
+tauri-browse focus @e1              # Focus element
+tauri-browse drag @e1 @e2           # Drag source element to destination
 tauri-browse fill @e2 "text"        # Clear and type
 tauri-browse type @e2 "more"        # Type without clearing
 tauri-browse select @e3 "option"    # Select dropdown option
-tauri-browse check @e4              # Toggle checkbox
+tauri-browse check @e4              # Check checkbox
+tauri-browse uncheck @e4            # Uncheck checkbox (only if checked)
 tauri-browse press Enter            # Press key (Enter, Tab, Escape, etc.)
 tauri-browse scroll down 300        # Scroll (up/down/left/right)
+tauri-browse scrollintoview @e1     # Scroll element into view
 tauri-browse highlight @e1          # Highlight element visually
+```
+
+### File handling
+
+```bash
+tauri-browse upload @e1 /path/to/file    # Upload file to input element
+tauri-browse download @e1                # Click element and wait for download
+tauri-browse download @e1 --path /tmp    # Download to specific directory
+tauri-browse download @e1 --timeout 60000  # Custom timeout in ms
 ```
 
 ### Semantic find
@@ -231,7 +249,14 @@ tauri-browse find role button click
 tauri-browse find role button click --name "Submit"
 tauri-browse find testid "submit-btn" click
 tauri-browse find placeholder "Search" type "query"
+tauri-browse find alt "Logo" click
+tauri-browse find title "Close" click
+tauri-browse find first ".card" click
+tauri-browse find last ".card" click
+tauri-browse find nth 3 ".card" click
 ```
+
+Available actions for `find`: `click`, `dblclick`, `hover`, `focus`, `fill`, `type`, `check`, `uncheck`, `select`, `highlight`, `scrollintoview`, `upload`, `download`.
 
 ### JavaScript evaluation
 
@@ -248,8 +273,26 @@ EOF
 
 ```bash
 tauri-browse get text @e1           # Get element text
+tauri-browse get html @e1           # Get element innerHTML
+tauri-browse get html @e1 --outer   # Get element outerHTML
+tauri-browse get value @e1          # Get input/textarea value
+tauri-browse get attr @e1 href      # Get element attribute by name
+tauri-browse get count ".card"      # Count elements matching selector
+tauri-browse get box @e1            # Get bounding rectangle as JSON
+tauri-browse get styles @e1         # Get common computed styles
+tauri-browse get styles @e1 color font-size  # Get specific styles
 tauri-browse get url                # Get current URL
 tauri-browse get title              # Get page title
+```
+
+### State checks
+
+Check element state. Prints `true` or `false`, with exit code 1 for `false` (enables shell conditionals).
+
+```bash
+tauri-browse is visible @e1         # Check computed display/visibility/opacity + dimensions
+tauri-browse is enabled @e1         # Check .disabled and aria-disabled
+tauri-browse is checked @e1         # Check .checked and aria-checked
 ```
 
 ### Wait
@@ -258,8 +301,39 @@ tauri-browse get title              # Get page title
 tauri-browse wait @e1               # Wait for element to appear
 tauri-browse wait 2000              # Wait milliseconds
 tauri-browse wait --url "/dashboard" # Wait for URL to contain pattern
+tauri-browse wait --text "Welcome"  # Wait for text to appear on page
 tauri-browse wait --load networkidle # Wait for network idle
 tauri-browse wait --fn "document.readyState === 'complete'"
+```
+
+All wait commands accept an optional timeout as the last argument (in ms, default 10000).
+
+### Frames
+
+```bash
+tauri-browse frame @e1              # Switch to iframe element
+tauri-browse frame main             # Switch back to main/top frame
+```
+
+### Dialogs
+
+```bash
+tauri-browse dialog accept          # Accept alert/confirm dialog
+tauri-browse dialog accept "input"  # Accept prompt with text
+tauri-browse dialog dismiss         # Dismiss dialog
+tauri-browse dialog text            # Get dialog text
+```
+
+### Console / Errors
+
+Console output is captured automatically on `launch` and `open`. Patches `console.log/warn/error/info/debug`, `window.onerror`, and unhandled promise rejections.
+
+```bash
+tauri-browse console                # Show all console entries
+tauri-browse console --level warn   # Filter by level
+tauri-browse console --clear        # Show entries and clear buffer
+tauri-browse errors                 # Show JS errors
+tauri-browse errors --clear         # Show and clear errors
 ```
 
 ### Diff
@@ -311,8 +385,25 @@ Save and restore cookies and localStorage across sessions.
 tauri-browse state save auth.json   # Save current state
 tauri-browse state load auth.json   # Restore state
 tauri-browse state list             # List saved state files
+tauri-browse state show auth.json   # Pretty-print state file contents
+tauri-browse state rename old new   # Rename state file
+tauri-browse state clean            # Remove empty/corrupt state files
 tauri-browse state clear [name]     # Clear saved state
 ```
+
+## Command chaining
+
+Commands can be chained with `&&` in a single shell invocation. The session persists between commands, so chaining is safe and efficient.
+
+```bash
+# Navigate, wait, and screenshot in one call
+tauri-browse open https://example.com && tauri-browse wait --load networkidle && tauri-browse screenshot page.png
+
+# Chain multiple interactions
+tauri-browse fill @e1 "user@example.com" && tauri-browse fill @e2 "password" && tauri-browse click @e3
+```
+
+Use `&&` when you don't need to read the output of intermediate commands. Run commands separately when you need to parse output (e.g. snapshot to discover refs, then interact).
 
 ## Ref lifecycle
 

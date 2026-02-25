@@ -7,7 +7,10 @@ Complete reference for all tauri-browse commands. For quick start and common pat
 ```bash
 tauri-browse launch <binary>     # Launch Tauri app via WebDriver
 tauri-browse open <url>          # Navigate to URL (aliases: goto, navigate)
-tauri-browse close               # Close session (aliases: quit, exit)
+tauri-browse close               # Close session
+tauri-browse back                # Navigate back in history
+tauri-browse forward             # Navigate forward in history
+tauri-browse reload              # Reload current page
 ```
 
 ## Snapshot (page analysis)
@@ -24,23 +27,66 @@ tauri-browse snapshot -i --json  # Output as JSON
 
 ```bash
 tauri-browse click @e1           # Click
+tauri-browse dblclick @e1        # Double-click
+tauri-browse hover @e1           # Hover (triggers CSS :hover)
+tauri-browse focus @e1           # Focus element
+tauri-browse drag @e1 @e2        # Drag source to destination
 tauri-browse fill @e2 "text"     # Clear and type
 tauri-browse type @e2 "text"     # Type without clearing
 tauri-browse press Enter         # Press key
 tauri-browse press Control+a     # Key combination
 tauri-browse check @e1           # Check checkbox
+tauri-browse uncheck @e1         # Uncheck checkbox (only if checked)
 tauri-browse select @e1 "value"  # Select dropdown option
-tauri-browse scroll down 500     # Scroll page (default: down 300px)
+tauri-browse scroll down 500     # Scroll page
+tauri-browse scrollintoview @e1  # Scroll element into view
 tauri-browse highlight @e1       # Highlight element visually
 ```
+
+## File Handling
+
+```bash
+tauri-browse upload @e1 /path/to/file    # Upload file to input element
+tauri-browse download @e1                # Click element and wait for download
+tauri-browse download @e1 --path /tmp    # Download to specific directory
+tauri-browse download @e1 --timeout 60000  # Custom timeout in ms
+```
+
+The `download` command clicks the element, then polls the download directory for new files. Partial downloads (`.crdownload`, `.part`, `.tmp`) are filtered. Requires `--download-path` config or `--path` flag.
 
 ## Get Information
 
 ```bash
 tauri-browse get text @e1        # Get element text
+tauri-browse get html @e1        # Get element innerHTML
+tauri-browse get html @e1 --outer  # Get element outerHTML
+tauri-browse get value @e1       # Get input/textarea value
+tauri-browse get attr @e1 href   # Get element attribute by name
+tauri-browse get count ".card"   # Count elements matching selector
+tauri-browse get box @e1         # Get bounding rectangle as JSON
+tauri-browse get styles @e1      # Get common computed styles
+tauri-browse get styles @e1 color font-size  # Get specific styles
 tauri-browse get url             # Get current URL
 tauri-browse get title           # Get page title
 ```
+
+## State Checks
+
+```bash
+tauri-browse is visible @e1      # Check if element is visible
+tauri-browse is enabled @e1      # Check if element is enabled
+tauri-browse is checked @e1      # Check if checkbox/radio is checked
+```
+
+Prints `true` or `false`. Exit code is 1 for `false`, enabling shell conditionals:
+
+```bash
+if tauri-browse is visible @e1; then
+    tauri-browse click @e1
+fi
+```
+
+Visibility checks computed `display`, `visibility`, `opacity`, and bounding rect dimensions. Enabled checks both `.disabled` property and `aria-disabled` attribute. Checked checks `.checked` property and `aria-checked` attribute.
 
 ## Screenshots
 
@@ -60,13 +106,19 @@ Screenshots use ImageMagick's `import` command to capture the X display, because
 ```bash
 tauri-browse find role button click --name "Submit"
 tauri-browse find text "Sign In" click
-tauri-browse find text "Sign In" click --exact      # Exact match only
 tauri-browse find label "Email" fill "user@test.com"
 tauri-browse find placeholder "Search" type "query"
 tauri-browse find testid "submit-btn" click
+tauri-browse find alt "Logo image" click
+tauri-browse find title "Close dialog" click
+tauri-browse find first ".card" click
+tauri-browse find last ".card" click
+tauri-browse find nth 3 ".card" click
 ```
 
 Both explicit `role="..."` attributes and implicit roles (e.g. `<button>` for `role=button`) are matched.
+
+Available actions for `find`: `click`, `dblclick`, `hover`, `focus`, `fill`, `type`, `check`, `uncheck`, `select`, `highlight`, `scrollintoview`, `upload`, `download`.
 
 ## Wait
 
@@ -74,8 +126,46 @@ Both explicit `role="..."` attributes and implicit roles (e.g. `<button>` for `r
 tauri-browse wait @e1                     # Wait for element
 tauri-browse wait 2000                    # Wait milliseconds
 tauri-browse wait --url "/dashboard"      # Wait for URL to contain pattern
+tauri-browse wait --text "Welcome"        # Wait for text to appear on page
 tauri-browse wait --load networkidle      # Wait for network idle
 tauri-browse wait --fn "window.ready"     # Wait for JS condition
+```
+
+All wait commands accept an optional timeout as the last argument (in ms, default 10000):
+
+```bash
+tauri-browse wait @e1 30000              # Wait up to 30s for element
+tauri-browse wait --text "Done" 5000     # Wait up to 5s for text
+```
+
+## Frames
+
+```bash
+tauri-browse frame @e1           # Switch to iframe element
+tauri-browse frame main          # Switch back to main/top frame
+```
+
+After switching frames, snapshots and interactions target the frame content. Always switch back with `frame main` when done.
+
+## Dialogs (alerts, confirms, prompts)
+
+```bash
+tauri-browse dialog accept       # Accept alert/confirm dialog
+tauri-browse dialog accept "yes" # Accept prompt with input text
+tauri-browse dialog dismiss      # Dismiss dialog
+tauri-browse dialog text         # Get dialog text
+```
+
+## Console / Errors
+
+Console output is captured automatically on `launch` and `open`. The capture patches `console.log/warn/error/info/debug`, `window.onerror`, and unhandled promise rejections.
+
+```bash
+tauri-browse console             # Show all console entries
+tauri-browse console --level warn  # Filter by level (log/warn/error/info/debug)
+tauri-browse console --clear     # Show entries and clear buffer
+tauri-browse errors              # Show only errors
+tauri-browse errors --clear      # Show errors and clear them
 ```
 
 ## Diff (compare page states)
@@ -117,6 +207,9 @@ tauri-browse session list            # List active sessions
 tauri-browse state save auth.json    # Save cookies, storage state
 tauri-browse state load auth.json    # Restore saved state
 tauri-browse state list              # List saved state files
+tauri-browse state show auth.json    # Pretty-print state file contents
+tauri-browse state rename old new    # Rename state file
+tauri-browse state clean             # Remove empty/corrupt state files
 tauri-browse state clear [name]      # Clear saved state
 ```
 

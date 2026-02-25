@@ -51,6 +51,9 @@ tauri-browse open https://example.com && tauri-browse wait --load networkidle &&
 tauri-browse launch <binary>          # Launch Tauri app via WebDriver
 tauri-browse open <url>               # Navigate to URL (aliases: goto, navigate)
 tauri-browse close                    # Close session
+tauri-browse back                     # Navigate back
+tauri-browse forward                  # Navigate forward
+tauri-browse reload                   # Reload page
 
 # Snapshot
 tauri-browse snapshot -i              # Interactive elements with refs (recommended)
@@ -60,12 +63,20 @@ tauri-browse snapshot -i --json       # Output as JSON
 
 # Interaction (use @refs from snapshot)
 tauri-browse click @e1                # Click element
+tauri-browse dblclick @e1             # Double-click element
+tauri-browse hover @e1                # Hover over element
+tauri-browse focus @e1                # Focus element
+tauri-browse drag @e1 @e2             # Drag from source to destination
 tauri-browse fill @e2 "text"          # Clear and type text
 tauri-browse type @e2 "text"          # Type without clearing
 tauri-browse select @e1 "option"      # Select dropdown option
 tauri-browse check @e1                # Check checkbox
+tauri-browse uncheck @e1              # Uncheck checkbox (only if checked)
 tauri-browse press Enter              # Press key
 tauri-browse scroll down 500          # Scroll page
+tauri-browse scrollintoview @e1       # Scroll element into view
+tauri-browse upload @e1 /path/to/file # Upload file to input
+tauri-browse download @e1 --path /tmp # Click and wait for download
 
 # Semantic find
 tauri-browse find text "Sign In" click
@@ -73,18 +84,52 @@ tauri-browse find label "Email" fill "user@test.com"
 tauri-browse find role button click --name "Submit"
 tauri-browse find placeholder "Search" type "query"
 tauri-browse find testid "submit-btn" click
+tauri-browse find alt "Logo" click
+tauri-browse find title "Close" click
+tauri-browse find first ".card" click
+tauri-browse find last ".card" click
+tauri-browse find nth 3 ".card" click
 
 # Get information
 tauri-browse get text @e1             # Get element text
+tauri-browse get html @e1             # Get innerHTML (--outer for outerHTML)
+tauri-browse get value @e1            # Get input value
+tauri-browse get attr @e1 href        # Get element attribute
+tauri-browse get count ".card"        # Count matching elements
+tauri-browse get box @e1              # Get bounding rectangle as JSON
+tauri-browse get styles @e1 color     # Get computed styles
 tauri-browse get url                  # Get current URL
 tauri-browse get title                # Get page title
+
+# State checks (prints true/false, exit code 1 for false)
+tauri-browse is visible @e1           # Check if element is visible
+tauri-browse is enabled @e1           # Check if element is enabled
+tauri-browse is checked @e1           # Check if element is checked
 
 # Wait
 tauri-browse wait @e1                 # Wait for element
 tauri-browse wait --load networkidle  # Wait for network idle
 tauri-browse wait --url "/page"       # Wait for URL pattern
+tauri-browse wait --text "Welcome"    # Wait for text to appear
 tauri-browse wait --fn "document.readyState === 'complete'"
 tauri-browse wait 2000                # Wait milliseconds
+
+# Frames
+tauri-browse frame @e1                # Switch to iframe
+tauri-browse frame main               # Switch back to main frame
+
+# Dialogs
+tauri-browse dialog accept            # Accept alert/confirm
+tauri-browse dialog accept "input"    # Accept prompt with text
+tauri-browse dialog dismiss           # Dismiss dialog
+tauri-browse dialog text              # Get dialog text
+
+# Console/Errors
+tauri-browse console                  # Show console output
+tauri-browse console --level error    # Filter by level
+tauri-browse console --clear          # Show and clear
+tauri-browse errors                   # Show JS errors
+tauri-browse errors --clear           # Show and clear errors
 
 # Capture
 tauri-browse screenshot               # Screenshot to temp dir
