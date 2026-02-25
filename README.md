@@ -101,25 +101,74 @@ tauri-browse [options] <command> [args]
 
 | Option | Description | Default |
 |---|---|---|
-| `--session <name>` | Session name for parallel sessions | `default` |
+| `--session <name>` | Session name | `default` |
 | `--driver <url>` | WebDriver URL | `http://localhost:4444` |
 | `--display <display>` | X display for screenshots | auto-detected from Xvfb |
+| `--config <path>` | Explicit config file path | |
+| `--json` | Default to JSON output for snapshots | `false` |
+| `--full` | Default to full page screenshots | `false` |
+| `--annotate` | Default to annotated screenshots | `false` |
+| `--debug` | Verbose output | `false` |
+| `--timeout <secs>` | Request timeout in seconds | `10` |
+| `--download-path <p>` | Default download directory | |
+
+Boolean flags accept an optional `true`/`false` value (e.g. `--json false` to override a config default). Bare flags default to `true`.
+
+### Configuration files
+
+tauri-browse supports layered configuration:
+
+| Location | Scope |
+|---|---|
+| `~/.tauri-browse/config.json` | User defaults (all projects) |
+| `./tauri-browse.json` | Project overrides (current directory) |
+
+Priority (lowest to highest): user config < project config < env vars < CLI flags.
+
+Use `--config <path>` or `TAURI_BROWSE_CONFIG` env var to load a specific config file instead (skips user/project config loading).
+
+Config keys use camelCase:
+
+```json
+{
+  "driver": "http://localhost:4444",
+  "display": ":99",
+  "session": "default",
+  "json": false,
+  "full": false,
+  "annotate": false,
+  "debug": false,
+  "timeout": 10,
+  "downloadPath": "/tmp/downloads"
+}
+```
 
 ### Environment variables
 
+All CLI options have corresponding environment variables:
+
 | Variable | Description |
 |---|---|
-| `TAURI_BROWSE_DRIVER` | WebDriver URL (same as `--driver`) |
-| `TAURI_BROWSE_DISPLAY` | X display override (same as `--display`) |
+| `TAURI_BROWSE_CONFIG` | Explicit config file path |
+| `TAURI_BROWSE_DRIVER` | WebDriver URL |
+| `TAURI_BROWSE_DISPLAY` | X display for screenshots |
+| `TAURI_BROWSE_SESSION` | Default session name |
+| `TAURI_BROWSE_JSON` | Default to JSON output (`true`/`false`) |
+| `TAURI_BROWSE_FULL` | Default to full screenshots (`true`/`false`) |
+| `TAURI_BROWSE_ANNOTATE` | Default to annotated screenshots (`true`/`false`) |
+| `TAURI_BROWSE_DEBUG` | Verbose output (`true`/`false`) |
+| `TAURI_BROWSE_TIMEOUT` | Request timeout in seconds |
+| `TAURI_BROWSE_DOWNLOAD_PATH` | Default download directory |
 
 ### Display auto-detection
 
-tauri-browse automatically detects a running Xvfb process and uses its display for screenshots. The priority order is:
+tauri-browse automatically detects a running Xvfb process and uses its display for screenshots. The resolution order for display is:
 
-1. `--display` flag
+1. `--display` CLI flag
 2. `TAURI_BROWSE_DISPLAY` env var
-3. Running Xvfb process (auto-detected via `pgrep`)
-4. `DISPLAY` env var
+3. `display` in config file
+4. Running Xvfb process (auto-detected via `pgrep`)
+5. `DISPLAY` env var
 
 This means you typically don't need to set `DISPLAY` at all -- just start Xvfb and tauri-browse finds it.
 

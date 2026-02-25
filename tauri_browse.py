@@ -11,7 +11,14 @@ Usage:
 Global options:
     --session <name>    Session name (default: "default")
     --driver <url>      WebDriver URL (default: http://localhost:4444)
-    --display <display> X display for screenshots
+    --display <display> X display for screenshots (auto-detects Xvfb)
+    --config <path>     Explicit config file path
+    --json              Default to JSON output for snapshots
+    --full              Default to full page screenshots
+    --annotate          Default to annotated screenshots
+    --debug             Verbose output
+    --timeout <secs>    Request timeout in seconds (default: 10)
+    --download-path <p> Default download directory
 
 Commands:
     launch <binary>             Launch Tauri app via WebDriver
@@ -66,9 +73,24 @@ Commands:
     state list                  List saved state files
     state clear [name]          Clear saved state
 
+Configuration:
+    Config files: ~/.tauri-browse/config.json (user)
+                  ./tauri-browse.json (project, overrides user)
+    Priority: CLI flags > env vars > project config > user config > defaults
+    Config keys use camelCase: driver, display, session, sessionName,
+        json, full, annotate, debug, timeout, downloadPath
+
 Environment variables:
+    TAURI_BROWSE_CONFIG         Explicit config file path
     TAURI_BROWSE_DRIVER         WebDriver URL (default: http://localhost:4444)
     TAURI_BROWSE_DISPLAY        X display for screenshots
+    TAURI_BROWSE_SESSION        Default session name
+    TAURI_BROWSE_JSON           Default to JSON output (true/false)
+    TAURI_BROWSE_FULL           Default to full screenshots (true/false)
+    TAURI_BROWSE_ANNOTATE       Default to annotated screenshots (true/false)
+    TAURI_BROWSE_DEBUG          Verbose output (true/false)
+    TAURI_BROWSE_TIMEOUT        Request timeout in seconds
+    TAURI_BROWSE_DOWNLOAD_PATH  Default download directory
 """
 
 import sys
@@ -84,10 +106,12 @@ from pathlib import Path
 
 VERSION = "0.1.0"
 DEFAULT_DRIVER = "http://localhost:4444"
-REQUEST_TIMEOUT = 10
+DEFAULT_TIMEOUT = 10
 CONFIG_DIR = Path.home() / ".tauri-browse"
 SESSIONS_DIR = CONFIG_DIR / "sessions"
 STATES_DIR = CONFIG_DIR / "states"
+USER_CONFIG_FILE = CONFIG_DIR / "config.json"
+PROJECT_CONFIG_FILE = Path("tauri-browse.json")
 
 SPECIAL_KEYS = {
     "enter": "\uE007", "return": "\uE007",
@@ -271,22 +295,100 @@ def detect_xvfb_display():
     return None
 
 
+def _read_config_file(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _env_bool(name):
+    val = os.environ.get(name, "").lower()
+    return val not in ("", "0", "false", "no")
+
+
+def load_config_files(explicit_path=None):
+    if explicit_path:
+        p = Path(explicit_path)
+        if not p.exists():
+            print(f"Config file not found: {explicit_path}", file=sys.stderr)
+            sys.exit(1)
+        return _read_config_file(p)
+
+    env_path = os.environ.get("TAURI_BROWSE_CONFIG")
+    if env_path:
+        p = Path(env_path)
+        if not p.exists():
+            print(f"Config file not found: {env_path}", file=sys.stderr)
+            sys.exit(1)
+        return _read_config_file(p)
+
+    user = _read_config_file(USER_CONFIG_FILE)
+    project = _read_config_file(PROJECT_CONFIG_FILE)
+    merged = dict(user)
+    merged.update({k: v for k, v in project.items() if v is not None})
+    return merged
+
+
 class Config:
-    def __init__(self, session="default", driver=None, display=None):
-        self.session = session
-        self.driver = driver or os.environ.get(
-            "TAURI_BROWSE_DRIVER", DEFAULT_DRIVER)
-        self.display = (display
+    def __init__(self, cli_flags=None):
+        cli = cli_flags or {}
+        file_cfg = load_config_files(cli.get("config"))
+
+        def resolve_str(key, env_name, default=None):
+            return cli.get(key) or os.environ.get(env_name) or file_cfg.get(key) or default
+
+        def resolve_bool(key, env_name):
+            if cli.get(key) is not None:
+                return cli[key]
+            if os.environ.get(env_name):
+                return _env_bool(env_name)
+            v = file_cfg.get(key)
+            if v is not None:
+                return bool(v)
+            return False
+
+        def resolve_int(key, env_name, default):
+            if cli.get(key) is not None:
+                return cli[key]
+            env_val = os.environ.get(env_name)
+            if env_val:
+                try:
+                    return int(env_val)
+                except ValueError:
+                    pass
+            v = file_cfg.get(key)
+            if v is not None:
+                try:
+                    return int(v)
+                except (ValueError, TypeError):
+                    pass
+            return default
+
+        self.session = resolve_str(
+            "session", "TAURI_BROWSE_SESSION",
+            resolve_str("sessionName", "TAURI_BROWSE_SESSION_NAME", "default"))
+        self.driver = resolve_str("driver", "TAURI_BROWSE_DRIVER", DEFAULT_DRIVER)
+        self.display = (cli.get("display")
                         or os.environ.get("TAURI_BROWSE_DISPLAY")
+                        or file_cfg.get("display")
                         or detect_xvfb_display()
                         or os.environ.get("DISPLAY"))
+        self.json = resolve_bool("json", "TAURI_BROWSE_JSON")
+        self.full = resolve_bool("full", "TAURI_BROWSE_FULL")
+        self.annotate = resolve_bool("annotate", "TAURI_BROWSE_ANNOTATE")
+        self.debug = resolve_bool("debug", "TAURI_BROWSE_DEBUG")
+        self.timeout = resolve_int("timeout", "TAURI_BROWSE_TIMEOUT", DEFAULT_TIMEOUT)
+        self.download_path = resolve_str("downloadPath", "TAURI_BROWSE_DOWNLOAD_PATH")
+
         if self.display:
             os.environ["DISPLAY"] = self.display
 
 
 # --- HTTP / WebDriver ---
 
-def request(driver, method, url, body=None, timeout=REQUEST_TIMEOUT):
+def request(driver, method, url, body=None, timeout=DEFAULT_TIMEOUT):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         url,
@@ -318,7 +420,7 @@ def request(driver, method, url, body=None, timeout=REQUEST_TIMEOUT):
         sys.exit(1)
 
 
-def request_quiet(method, url, body=None, timeout=REQUEST_TIMEOUT):
+def request_quiet(method, url, body=None, timeout=DEFAULT_TIMEOUT):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         url,
@@ -684,7 +786,7 @@ def cmd_snapshot(config, args):
     sid = state["session_id"]
     interactive = "-i" in args
     cursor_interactive = "-C" in args
-    as_json = "--json" in args
+    as_json = "--json" in args or config.json
     scope = None
     if "-s" in args:
         idx = args.index("-s")
@@ -721,8 +823,8 @@ def cmd_snapshot(config, args):
 def cmd_screenshot(config, args):
     state = load_session(config.session)
     sid = state["session_id"]
-    do_annotate = "--annotate" in args
-    do_full = "--full" in args
+    do_annotate = "--annotate" in args or config.annotate
+    do_full = "--full" in args or config.full
 
     path = None
     for a in args:
@@ -1411,6 +1513,17 @@ COMMANDS = {
 }
 
 
+BOOL_FLAGS = {"--json", "--full", "--annotate", "--debug"}
+VALUE_FLAGS = {"--session", "--session-name", "--driver", "--display",
+               "--config", "--timeout", "--download-path"}
+
+
+def _parse_bool_flag(args, i):
+    if i + 1 < len(args) and args[i + 1] in ("true", "false"):
+        return args[i + 1] == "true", True
+    return True, False
+
+
 def main():
     argv = sys.argv[1:]
 
@@ -1422,26 +1535,29 @@ def main():
         print(f"tauri-browse {VERSION}")
         sys.exit(0)
 
-    # Parse global options
-    session = "default"
-    driver = None
-    display = None
-
+    cli_flags = {}
+    remaining = []
     i = 0
     while i < len(argv):
-        if argv[i] == "--session" and i + 1 < len(argv):
-            session = argv[i + 1]
-            i += 2
-        elif argv[i] == "--driver" and i + 1 < len(argv):
-            driver = argv[i + 1]
-            i += 2
-        elif argv[i] == "--display" and i + 1 < len(argv):
-            display = argv[i + 1]
+        arg = argv[i]
+        if arg in BOOL_FLAGS:
+            val, consumed = _parse_bool_flag(argv, i)
+            key = arg.lstrip("-").replace("-", "_")
+            cli_flags[key] = val
+            i += 2 if consumed else 1
+        elif arg in VALUE_FLAGS and i + 1 < len(argv):
+            key = arg.lstrip("-")
+            # Convert kebab-case to camelCase
+            parts = key.split("-")
+            key = parts[0] + "".join(p.capitalize() for p in parts[1:])
+            cli_flags[key] = argv[i + 1]
             i += 2
         else:
+            remaining = argv[i:]
             break
+    else:
+        remaining = []
 
-    remaining = argv[i:]
     if not remaining:
         print((__doc__ or "").strip())
         sys.exit(0)
@@ -1455,7 +1571,7 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    config = Config(session=session, driver=driver, display=display)
+    config = Config(cli_flags=cli_flags)
     COMMANDS[cmd_name](config, cmd_args)
 
 
